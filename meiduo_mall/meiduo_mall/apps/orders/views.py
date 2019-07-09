@@ -1,190 +1,209 @@
-from django.shortcuts import render
-from django.views import View
-from django import http
-from meiduo_mall.utils.login import LoginRequiredMixin
-from users.models import Address
-from django_redis import get_redis_connection
-from goods.models import SKU
-from users.models import Address
 import json
-from meiduo_mall.utils.response_code import RETCODE
-from .models import OrderInfo, OrderGoods
-from datetime import datetime
+from decimal import Decimal
+
+from django import http
+from django.core.paginator import Paginator, EmptyPage
 from django.db import transaction
-from django.core.paginator import Paginator
+from django.shortcuts import render
+
+# Create your views here.
+from django.utils import timezone
+from django.views import View
+from django_redis import get_redis_connection
+
+from goods.models import SKU
+from meiduo_mall.utils.response_code import RETCODE
+from orders.models import OrderInfo, OrderGoods
+from users.models import Address
+
+from users.utils import LoginRequired, LoginRequiredJSONMixin
 
 
-class SettlementView(LoginRequiredMixin, View):
+class OrderSettlementView(LoginRequired, View):
+    """结算订单"""
+
     def get(self, request):
-        # 收货地址
-        addresses = request.user.adresses.filter(is_delete=False)
-        # addresses=Address.objects.filter(is_delete=False,user_id=request.user.id)
+        """提供订单结算页面"""
+        # 1.获取登陆用户
+        user = request.user
+        # 2.查询地址信息
+        try:
+            addresses = Address.objects.filter(user=user, is_deleted=False)
+        except Address.DoesNotExist:
+            addresses = None
 
-        # 查询购物车中选中的商品
-        redis_cli = get_redis_connection('cart')
-        # 从hash中读取商品编号、数量
-        cart_dict_bytes = redis_cli.hgetall('cart%d' % request.user.id)
-        cart_dict_int = {int(sku_id): int(count) for sku_id, count in cart_dict_bytes.items()}
-        # 从set中读取选中的商品编号
-        cart_selected_bytes = redis_cli.smembers('selected%d' % request.user.id)
-        cart_selected_int = [int(sku_id) for sku_id in cart_selected_bytes]
-        # 查询选中的商品
-        skus = SKU.objects.filter(pk__in=cart_selected_int)
-        # 遍历，构造html中需要的数据
-        sku_list = []
+        # 3.从redis购物车中查询出被勾选的商品信息
+        redis_conn = get_redis_connection('carts')
+        item_dict = redis_conn.hgetall('carts_%s' % user.id)
+        cart_selected = redis_conn.smembers('selected_%s' % user.id)
+        cart = {}
+        for sku_id in cart_selected:
+            cart[int(sku_id)] = int(item_dict[sku_id])
+
+        # 4.准备初始值
         total_count = 0
-        total_amount = 0
+        total_amount = Decimal(0.00)
+
+        # 5.查询商品信息
+        skus = SKU.objects.filter(id__in=cart.keys())
         for sku in skus:
-            sku_list.append({
-                'id': sku.id,
-                'default_image_url': sku.default_image.url,
-                'name': sku.name,
-                'price': sku.price,
-                'count': cart_dict_int.get(sku.id),
-                'total_amount': sku.price * cart_dict_int.get(sku.id)
-            })
-            # 计算总数量
-            total_count += cart_dict_int.get(sku.id)
-            # 计算总金额
-            total_amount += sku.price * cart_dict_int.get(sku.id)
+            sku.count = cart[sku.id]
+            sku.amount = sku.count * sku.price
+            # 计算总数量和总金额
+            total_count += sku.count
+            total_amount += sku.count * sku.price
 
-        # 运费
-        transit = 10
-        # 实付款
-        payment_amount = total_amount + transit
+        # 6.补充运费
+        freight = Decimal('10.00')
 
+        # 7.渲染界面
         context = {
             'addresses': addresses,
-            'sku_list': sku_list,
+            'skus': skus,
             'total_count': total_count,
             'total_amount': total_amount,
-            'transit': transit,
-            'payment_amount': payment_amount
+            'freight': freight,
+            'payment_amount': total_amount + freight
         }
+        # 8.返回
+        return render(request, 'place_order.html', context=context)
 
-        return render(request, 'place_order.html', context)
 
+class OrderCommitView(LoginRequiredJSONMixin, View):
+    """订单提交"""
 
-class CommitView(LoginRequiredMixin, View):
     def post(self, request):
-        # 接收
-        dict1 = json.loads(request.body.decode())
-        address_id = dict1.get('address_id')
-        pay_method = dict1.get('pay_method')
+        """保存订单信息和订单商品信息"""
+        # 1.获取当前要保存的订单数据
+        json_dict = json.loads(request.body.decode())
+        address_id = json_dict.get('address_id')
+        pay_method = json_dict.get('pay_method')
 
-        # 验证
+        # 2.校验参数
         if not all([address_id, pay_method]):
-            return http.JsonResponse({'code': RETCODE.PARAMERR, 'errmsg': '参数不完整'})
-        # 收货地址
+            return http.HttpResponseForbidden('缺少必传参数')
         try:
-            address = Address.objects.get(pk=address_id, is_delete=False, user_id=request.user.id)
-        except:
-            return http.JsonResponse({'code': RETCODE.PARAMERR, 'errmsg': '收货地址无效'})
-        # 支付方式
-        if pay_method not in [1, 2]:
-            return http.JsonResponse({'code': RETCODE.PARAMERR, 'errmsg': '支付方式无效'})
+            address = Address.objects.get(id=address_id)
+        except Exception:
+            return http.HttpResponseForbidden('参数address_id 有误')
+        if pay_method not in [
+            OrderInfo.PAY_METHODS_ENUM['CASH'],
+            OrderInfo.PAY_METHODS_ENUM['ALIPAY']
+        ]:
+            return http.HttpResponseForbidden('参数pay_method有误')
 
-        # 处理（业务最多）
+        # 3.获取登陆用户
         user = request.user
-        now = datetime.now()
-        # 1.查询购物车选中的商品
-        redis_cli = get_redis_connection('cart')
-        # 从hash中读取商品编号、数量
-        cart_dict_bytes = redis_cli.hgetall('cart%d' % request.user.id)
-        cart_dict_int = {int(sku_id): int(count) for sku_id, count in cart_dict_bytes.items()}
-        # 从set中读取选中的商品编号
-        cart_selected_bytes = redis_cli.smembers('selected%d' % request.user.id)
-        cart_selected_int = [int(sku_id) for sku_id in cart_selected_bytes]
+        # 4.生成订单编号
+        order_id = timezone.localtime().strftime('%Y%m%d%H%M%S') + ('%09d' % user.id)
 
-        with transaction.atomic():  # 禁止自动提交
-            # 开启事务
-            sid = transaction.savepoint()
+        with transaction.atomic():
+            # 创建事务保存点
+            save_id = transaction.savepoint()
 
-            # 2.创建订单基本对象
-            order_id = '%s%09d' % (now.strftime('%Y%m%d%H%M%S'), user.id)
-            total_count = 0
-            total_amount = 0
-            if pay_method == '1':
-                # 待发货
-                status = 1
-            else:
-                # 待支付
-                status = 2
+            # 5.保存订单基本信息
             order = OrderInfo.objects.create(
                 order_id=order_id,
-                user_id=user.id,
-                address_id=address_id,
+                user=user,
+                address=address,
                 total_count=0,
-                total_amount=0,
-                freight=10,
+                total_amount=Decimal('0'),
+                freight=Decimal('10.00'),
                 pay_method=pay_method,
-                status=status
-            )
+                status=OrderInfo.ORDER_STATUS_ENUM['UNPAID']
+                if pay_method == OrderInfo.PAY_METHODS_ENUM['ALIPAY']
+                else OrderInfo.ORDER_STATUS_ENUM['UNSEND'])
+            # 6.从redis中读取购物车中被勾选的商品信息
+            redis_conn = get_redis_connection('carts')
+            item_dict = redis_conn.hgetall('carts_%s' % user.id)
+            cart_selected = redis_conn.smembers('selected_%s' % user.id)
+            carts = {}
+            for sku_id in cart_selected:
+                carts[int(sku_id)] = int(item_dict[sku_id])
 
-            # 3.查询商品对象
-            skus = SKU.objects.filter(pk__in=cart_selected_int)
+            # 7.获取选中的商品id
+            sku_ids = carts.keys()
 
-            # 4.遍历
-            for sku in skus:
-                cart_count = cart_dict_int.get(sku.id)
-                # 4.1判断库存，不足则提示,如果足够则继续执行
-                if sku.stock < cart_count:
-                    # 回滚事务
-                    transaction.savepoint_rollback(sid)
-                    # 给出提示
-                    return http.JsonResponse({'code': RETCODE.PARAMERR, 'errmsg': '商品[%d]库存不足' % sku.id})
+            # 8.遍历购物车中被勾选的商品信息
+            for sku_id in sku_ids:
+                # 增加一循环,查询三次
+                i = 0
+                while i < 3:
+                    # 查询sku信息
+                    sku = SKU.objects.get(id=sku_id)
 
-                # 强制停止
-                # import time
-                # time.sleep(5)
+                    # 读取原始库存
+                    origin_stock = sku.stock
+                    origin_sales = sku.sales
 
-                # 4.2修改sku的库存、销量
-                # sku.stock -= cart_count
-                # sku.sales += cart_count
-                # sku.save()
+                    # 判断sku库存
+                    sku_count = carts[sku.id]
+                    if sku_count > origin_stock:
+                        # 出错就回滚
+                        transaction.savepoint_rollback(save_id)
 
-                # 4.2使用乐观锁进行修改
-                stock_old = sku.stock
-                stock_new = sku.stock - cart_count
-                sales_new = sku.sales + cart_count
-                result = SKU.objects.filter(pk=sku.id, stock=stock_old).update(stock=stock_new, sales=sales_new)
-                # result表示sql语句修改数据的个数
-                if result == 0:
-                    # 库存发生变化，未成功购买
-                    transaction.savepoint_rollback(sid)
-                    return http.JsonResponse({'code': RETCODE.PARAMERR, 'errmsg': '服务器忙，请稍候重试'})
+                        return http.JsonResponse({
+                            'code': RETCODE.STOCKERR,
+                            'errmsg': '库存不足'
+                        })
+                    # sku库存减少,增加销量
+                    # sku.stock -= sku_count
+                    # sku.sales += sku_count
+                    # sku.save()
 
-                # 4.3创建订单商品对象
-                order_sku = OrderGoods.objects.create(
-                    order_id=order_id,
-                    sku_id=sku.id,
-                    count=cart_count,
-                    price=sku.price
-                )
+                    # 乐观锁更新库存和销量
+                    # 计算差值
+                    new_stock = origin_stock - sku_count
+                    new_sales = origin_sales + sku_count
+                    result = SKU.objects.filter(
+                        id=sku_id,
+                        stock=origin_stock
+                    ).update(stock=new_stock, sales=new_sales)
+                    if result == 0:
+                        i += 1
+                        continue
 
-                # 4.4 计算总金额、总数量
-                total_count += cart_count
-                total_amount += sku.price * cart_count
+                    # 修改spu的销量
+                    sku.goods.sales += sku_count
+                    sku.goods.save()
 
-            # 5.修改订单对象的总金额、总数量
-            order.total_count = total_count
-            order.total_amount = total_amount + 10
+                    # 保存订单商品信息
+                    OrderGoods.objects.create(
+                        order=order,
+                        sku=sku,
+                        count=sku_count,
+                        price=sku.price,
+                    )
+                    # 保存商品订单中的总价和总数量
+                    order.total_count += sku_count
+                    order.total_amount += (sku_count * sku.price)
+
+                    # 跳出循环
+                    break
+
+            # 添加邮费和保存订单信息
+            order.total_amount += order.freight
             order.save()
 
-            # 提交
-            transaction.savepoint_commit(sid)
+            # 提交订单成功,提交事务
+            transaction.savepoint_commit(save_id)
 
-        # 6.删除购物车中选中的商品
-        redis_cli.hdel('cart%d' % request.user.id, *cart_selected_int)
-        redis_cli.srem('selected%d' % request.user.id, *cart_selected_int)
+            # 清除购物车中已经结算的商品
+            redis_conn.hdel('carts_%s' % user.id, *cart_selected)
+            redis_conn.srem('selected_%s' % user.id, *cart_selected)
 
-        # 响应
-        return http.JsonResponse({'code': RETCODE.OK, 'errmsg': 'OK', 'order_id': order_id})
+        # 9.响应提交订单结果
+        return http.JsonResponse({
+            'code': RETCODE.OK,
+            'errmsg': '下单成功',
+            'order_id': order.order_id
+        })
 
 
-class SuccessView(LoginRequiredMixin, View):
+class OrderSuccessView(LoginRequired, View):
+    """提交订单成功"""
+
     def get(self, request):
-        # 接收
         order_id = request.GET.get('order_id')
         payment_amount = request.GET.get('payment_amount')
         pay_method = request.GET.get('pay_method')
@@ -195,130 +214,137 @@ class SuccessView(LoginRequiredMixin, View):
             'pay_method': pay_method
         }
 
-        return render(request, 'order_success.html', context)
+        return render(request, 'order_success.html', context=context)
 
 
-class InfoView(LoginRequiredMixin, View):
+class UserOrderInfoView(LoginRequired, View):
+    """我的订单"""
+
     def get(self, request, page_num):
-        # 查询当前登录用户的所有订单
-        order_list = request.user.orders.order_by('-create_time')
+        """提供我的订单页面"""
+        user = request.user
+        # 查询订单
+        orders = user.orderinfo_set.all().order_by("-create_time")
+        # 遍历所有订单
+        for order in orders:
+            # 绑定订单状态
+            order.status_name = OrderInfo.ORDER_STATUS_CHOICES[order.status - 1][1]
+            # 绑定支付方式
+            order.pay_method_name = OrderInfo.PAY_METHOD_CHOICES[order.pay_method - 1][1]
+            order.sku_list = []
+            # 查询订单商品
+            order_goods = order.skus.all()
+            # 遍历订单商品
+            for order_good in order_goods:
+                sku = order_good.sku
+                sku.count = order_good.count
+                sku.amount = sku.price * sku.count
+                order.sku_list.append(sku)
 
         # 分页
-        paginator = Paginator(order_list, 2)
-        # 获取当前页数据
-        page = paginator.page(page_num)
-
-        # 遍历当前页数据，转换页面中需要的结构
-        order_list2 = []
-        for order in page:
-            # 获取当前订单中所有订单商品
-            detail_list = []
-            for detail in order.skus.all():
-                detail_list.append({
-                    'default_image_url': detail.sku.default_image.url,
-                    'name': detail.sku.name,
-                    'price': detail.price,
-                    'count': detail.count,
-                    'total_amount': detail.price * detail.count
-                })
-
-            order_list2.append({
-                'create_time': order.create_time,
-                'order_id': order.order_id,
-                'details': detail_list,
-                'total_amount': order.total_amount,
-                'freight': order.freight,
-                'status': order.status
-            })
-
-        context = {
-            'page': order_list2,
-            'page_num': page_num,
-            'total_page': paginator.num_pages
-        }
-        return render(request, 'user_center_order.html', context)
-
-
-class CommentView(LoginRequiredMixin, View):
-    def get(self, request):
-        # 接收订单编号
-        order_id = request.GET.get('order_id')
-
-        # 查询订单商品列表
+        page_num = int(page_num)
         try:
-            order = OrderInfo.objects.get(pk=order_id, user_id=request.user.id)
-        except:
-            return http.Http404('商品编号无效')
-
-        # 获取订单的所有商品
-        skus = []
-        # detail表示OrderGoods类型的对象
-        for detail in order.skus.filter(is_commented=False):
-            skus.append({
-                'sku_id': detail.sku.id,
-                'default_image_url': detail.sku.default_image.url,
-                'name': detail.sku.name,
-                'price': str(detail.price),
-                'order_id': order_id
-            })
+            paginator = Paginator(orders, 2)
+            page_orders = paginator.page(page_num)
+            total_page = paginator.num_pages
+        except EmptyPage:
+            return http.HttpResponseNotFound('订单不存在')
 
         context = {
-            'skus': skus
+            "page_orders": page_orders,
+            'total_page': total_page,
+            'page_num': page_num,
         }
+        return render(request, "user_center_order.html", context)
+
+
+class OrderCommentView(LoginRequired, View):
+    """订单商品评价"""
+    def get(self, request):
+        """展示商品评价页面"""
+        # 1.接收参数
+        order_id = request.GET.get('order_id')
+        user = request.user
+        # 2.校验参数
+        try:
+            OrderInfo.objects.get(order_id=order_id,user=user)
+        except OrderInfo.DoesNotExist:
+            return http.HttpResponseForbidden('订单不存在')
+
+        # 3.查询订单中未被评价的商品信息
+        try:
+            uncomment_goods = OrderGoods.objects.filter(order_id=order_id, is_commented=False)
+        except Exception:
+            return http.HttpResponseForbidden('订单商品信息出错')
+
+        # 4.构造待评价商品的数据
+        uncomment_goods_list = []
+        for goods in uncomment_goods:
+            uncomment_goods_list.append({
+                'order_id': goods.order.order_id,
+                'sku_id': goods.sku.id,
+                'name': goods.sku.name,
+                'price': str(goods.price),
+                'default_image_url': goods.sku.default_image_url,
+                'comment': goods.comment,
+                'score': goods.score,
+                'is_anonymous': str(goods.is_anonymous),
+            })
+
+        # 5.渲染模板
+        context = {
+            'uncomment_goods_list':uncomment_goods_list
+        }
+        # 6.返回
         return render(request, 'goods_judge.html', context)
 
     def post(self, request):
-        # 接收
-        data = json.loads(request.body.decode())
-        order_id = data.get('order_id')
-        sku_id = data.get('sku_id')
-        comment = data.get('comment')
-        score = data.get('score')
-        is_anonymous = data.get('is_anonymous')
+        """评价订单商品"""
+        # 接收参数
+        json_dict = json.loads(request.body.decode())
+        order_id = json_dict.get('order_id')
+        sku_id = json_dict.get('sku_id')
+        score = json_dict.get('score')
+        comment = json_dict.get('comment')
+        is_anonymous = json_dict.get('is_anonymous')
+        # 校验参数
+        if not all([order_id, sku_id, score, comment]):
+            return http.HttpResponseForbidden('缺少必传参数')
+        try:
+            OrderInfo.objects.filter(order_id=order_id,
+                                     user=request.user,
+                                     status=OrderInfo.ORDER_STATUS_ENUM['UNCOMMENT'])
+        except OrderInfo.DoesNotExist:
+            return http.HttpResponseForbidden('参数order_id错误')
+        try:
+            sku = SKU.objects.get(id=sku_id)
+        except SKU.DoesNotExist:
+            return http.HttpResponseForbidden('参数sku_id错误')
+        if is_anonymous:
+            if not isinstance(is_anonymous, bool):
+                return http.HttpResponseForbidden('参数is_anonymous错误')
 
-        # 验证
-        if not all([order_id, sku_id, comment, score]):
-            return http.JsonResponse({
-                'code': RETCODE.PARAMERR,
-                'errmsg': '参数不完整'
-            })
-        if not isinstance(is_anonymous, bool):
-            return http.JsonResponse({
-                'code': RETCODE.PARAMERR,
-                'errmsg': '是否匿名参数错误'
-            })
-        # 查询OrderGoods对象
-        order_goods = OrderGoods.objects.get(order_id=order_id, sku_id=sku_id)
-        order_goods.comment = comment
-        order_goods.score = int(score)
-        order_goods.is_anonymous = is_anonymous
-        order_goods.is_commented = True
-        order_goods.save()
+        # 保存订单商品评价数据
+        OrderGoods.objects.filter(order_id=order_id,
+                                  sku_id=sku_id,
+                                  is_commented=False).update(
+            comment=comment,
+            score=score,
+            is_anonymous=is_anonymous,
+            is_commented=True
+        )
 
-        return http.JsonResponse({
-            'code': RETCODE.OK,
-            'errmsg': 'OK'
-        })
+        # 累计评论数据
+        sku.comments += 1
+        sku.save()
+        sku.goods.comments += 1
+        sku.goods.save()
 
+        # 如果所有订单商品都已评价，则修改订单状态为已完成
+        if OrderGoods.objects.filter(order_id=order_id,
+                                     is_commented=False).count() == 0:
+            OrderInfo.objects.filter(order_id=order_id).update(status=OrderInfo.ORDER_STATUS_ENUM['FINISHED'])
 
-class CommentSKUView(View):
-    def get(self, request, sku_id):
-        # 查询指定sku_id的所有评论信息
-        comments = OrderGoods.objects.filter(sku_id=sku_id, is_commented=True)
-        comment_list = []
-        # detail表示OrderGoods对象
-        for detail in comments:
-            username = detail.order.user.username
-            if detail.is_anonymous:
-                username = '******'
-            comment_list.append({
-                'username': username,
-                'comment': detail.comment,
-                'score': detail.score
-            })
+        return http.JsonResponse({'code': RETCODE.OK,
+                                  'errmsg': '评价成功'})
 
-        return http.JsonResponse({
-            'code': RETCODE.OK,
-            'errmsg': "OK",
-            'goods_comment_list': comment_list
-        })

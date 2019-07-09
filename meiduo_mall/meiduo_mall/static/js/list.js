@@ -6,14 +6,10 @@ var vm = new Vue({
         host,
         cart_total_count: 0, // 购物车总数量
         carts: [], // 购物车数据,
-		hots: [],
+		hot_skus: [],
         category_id: category_id,
-        username: '',
     },
     mounted(){
-        this.username=getCookie('username');
-        console.log(this.username);
-
         // 获取购物车数据
         this.get_carts();
 
@@ -48,9 +44,9 @@ var vm = new Vue({
                     responseType: 'json'
                 })
                 .then(response => {
-                    this.hots = response.data.hot_sku_list;
-                    for(var i=0; i<this.hots.length; i++){
-                        this.hots[i].url = '/goods/' + this.hots[i].id + '.html';
+                    this.hot_skus = response.data.hot_skus;
+                    for(var i=0; i<this.hot_skus.length; i++){
+                        this.hot_skus[i].url = '/goods/' + this.hot_skus[i].id + '.html';
                     }
                 })
                 .catch(error => {
@@ -59,3 +55,19 @@ var vm = new Vue({
         }
     }
 });
+
+
+
+
+
+
+
+// $(function () {
+//
+//     // 获取并展示购物车数据
+//     get_cart();
+//
+//     // 获取热销商品
+// 	var category_id = $('.breadcrumb').attr('category_id');
+// 	get_hot_sku(category_id);
+// });

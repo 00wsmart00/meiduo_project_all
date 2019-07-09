@@ -4,11 +4,12 @@
 <head>
     <meta http-equiv="Content-Type" content="text/html;charset=UTF-8">
     <title>美多商城-用户中心</title>
-    <link rel="stylesheet" type="text/css" href="/static/css/reset.css">
-    <link rel="stylesheet" type="text/css" href="/static/css/main.css">
-    <script type="text/javascript" src="/static/js/host.js"></script>
-    <script type="text/javascript" src="/static/js/vue-2.5.16.js"></script>
-    <script type="text/javascript" src="/static/js/axios-0.18.0.min.js"></script>
+    <link rel="stylesheet" type="text/css" href="{{ static('css/reset.css') }}">
+    <link rel="stylesheet" type="text/css" href="{{ static('css/main.css') }}">
+    <script type="text/javascript" src="{{ static('js/jquery-1.12.4.min.js') }}"></script>
+    <script type="text/javascript" src="{{ static('js/host.js') }}"></script>
+    <script type="text/javascript" src="{{ static('js/vue-2.5.16.js') }}"></script>
+    <script type="text/javascript" src="{{ static('js/axios-0.18.0.min.js') }}"></script>
 </head>
 <body>
 <div id="app" v-cloak>
@@ -16,24 +17,28 @@
         <div class="header">
             <div class="welcome fl">欢迎来到美多商城!</div>
             <div class="fr">
-                <div class="login_btn fl">
-                    欢迎您：<em>{{ request.user.username }}</em>
-                    <span>|</span>
-                    <a href="/logout/">退出</a>
+                <div class="login_info fl">
+                    欢迎您：<em>张 山</em>
                 </div>
-                 <div class="user_link fl">
+                <div class="login_btn fl">
+                    <a href="../templates/login.html">登录</a>
                     <span>|</span>
-                    <a href="/info/">用户中心</a>
+                    <a href="../templates/register.html">注册</a>
+                </div>
+                <div class="user_link fl">
                     <span>|</span>
-                    <a href="/carts/">我的购物车</a>
+                    <a href="../templates/user_center_info.html">用户中心</a>
+                    <span>|</span>
+                    <a href="cart.html">我的购物车</a>
                     <span>|</span>
                     <a href="user_center_order.html">我的订单</a>
                 </div>
             </div>
         </div>
     </div>
+
     <div class="search_bar clearfix">
-        <a href="/" class="logo fl"><img src="/static/images/logo.png"></a>
+        <a href="../templates/index.html" class="logo fl"><img src="{{ static('images/logo.png') }}"></a>
         <div class="search_wrap fl">
             <form method="get" action="/search/" class="search_con">
                 <input type="text" class="input_text fl" name="q" placeholder="搜索商品">
@@ -47,17 +52,18 @@
             </ul>
         </div>
     </div>
+
     <div class="main_con clearfix">
         <div class="left_menu_con clearfix">
             <h3>用户中心</h3>
             <ul>
-                <li><a href="/info/">· 个人信息</a></li>
-                <li><a href="/orders/info/1/">· 全部订单</a></li>
-                <li><a href="/addresses/" class="active">· 收货地址</a></li>
-                <li><a href="/password/">· 修改密码</a></li>
+                <li><a href="http://www.meiduo.site:8000/info/">· 个人信息</a></li>
+                <li><a href="user_center_order.html">· 全部订单</a></li>
+                <li><a href="http://www.meiduo.site:8000/addresses/" class="active">· 收货地址</a></li>
+                <li><a href="http://www.meiduo.site:8000/password/">· 修改密码</a></li>
             </ul>
         </div>
-        <div class="right_content clearfix" v-cloak>
+        <div class="right_content clearfix">
             <div class="site_top_con">
                 <a @click="show_add_site">新增收货地址</a>
                 <span>你已创建了<b>[[ addresses.length ]]</b>个收货地址，最多可创建<b>20</b>个</span>
@@ -65,7 +71,7 @@
             <div class="site_con" v-for="(address, index) in addresses">
                 <div class="site_title">
                     <div v-if="edit_title_index===index">
-                        <input v-model="input_title" type="text">
+                        <input v-model="input_title" type="text" name="">
                         <input @click="save_title(index)" type="button" name="" value="保 存">
                         <input @click="cancel_title(index)" type="reset" name="" value="取 消">
                     </div>
@@ -104,7 +110,8 @@
         <p>CopyRight © 2016 北京美多商业股份有限公司 All Rights Reserved</p>
         <p>电话：010-****888 京ICP备*******8号</p>
     </div>
-    <div class="pop_con" v-show="is_show_edit" v-cloak>
+
+    <div class="pop_con" v-show="is_show_edit">
         <div class="site_con site_pop">
             <div class="site_pop_title">
                 <h3 v-if="editing_address_index">编辑收货地址</h3>
@@ -149,18 +156,31 @@
                     <input v-model="form_address.email" @blur="check_email" type="text" class="email">
                     <span v-show="error_email" class="email_error">邮箱信息有误</span>
                 </div>
-                <input @click="save_address" type="button" :value="add_title" class="info_submit">
-                <input @click="is_show_edit=false" type="reset" value="取 消" class="info_submit info_reset">
+                <input @click="save_address" type="button" name="" value="保 存" class="info_submit">
+                <input @click="is_show_edit=false" type="reset" name="" value="取 消" class="info_submit info_reset">
             </form>
+        </div>
+        <div class="mask"></div>
+    </div>
+
+    <div class="pop_con2">
+        <div class="confirm_pop">
+            <div class="confirm_pop_title">
+                <h3>确认删除</h3>
+                <a href="javascript:;">×</a>
+            </div>
+            <p>您确认删除当前地址吗？</p>
+            <input type="button" value="确 定" class="confirm_submit"/>
+            <input type="button" value="取 消" class="confirm_submit confirm_cancel"/>
         </div>
         <div class="mask"></div>
     </div>
 </div>
 <script type="text/javascript">
     let addresses = {{ addresses | safe }};
-    let default_address_id = {{ user.default_address_id }};
+    let default_address_id = {{ default_address_id }};
 </script>
-<script type="text/javascript" src="/static/js/common.js"></script>
-<script type="text/javascript" src="/static/js/user_center_site.js"></script>
+<script type="text/javascript" src="{{ static('js/common.js') }}"></script>
+<script type="text/javascript" src="{{ static('js/user_center_site.js') }}"></script>
 </body>
 </html>

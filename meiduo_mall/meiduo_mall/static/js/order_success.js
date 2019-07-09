@@ -31,3 +31,33 @@ var vm = new Vue({
         },
     }
 });
+
+
+
+
+
+
+
+
+
+
+
+// $(function () {
+//
+// });
+//
+//
+// $('.payment').click(function () {
+//     var order_id = get_query_string('order_id');
+//     var url = '/payment/' + order_id + '/';
+//     $.get(url, function (response) {
+//         if (response.code == '0') {
+//             location.href = response.alipay_url;
+//         } else if (response.code == '4101') {
+//             location.href = '/login/?next=/orders/info/1/';
+//         } else {
+//             console.log(response);
+//             alert(response.errmsg);
+//         }
+//     });
+// });

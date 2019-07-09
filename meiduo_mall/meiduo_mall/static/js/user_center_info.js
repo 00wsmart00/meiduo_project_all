@@ -82,7 +82,7 @@ var vm = new Vue({
                 .then(response => {
                     this.histories = response.data.skus;
                     for(var i=0; i<this.histories.length; i++){
-                        this.histories[i].url = '/detail/' + this.histories[i].id;
+                        this.histories[i].url = '/goods/' + this.histories[i].id + '.html';
                     }
                 })
                 .catch(error => {
@@ -91,3 +91,73 @@ var vm = new Vue({
         }
     }
 });
+
+
+
+
+
+
+
+
+
+
+
+
+// var email_error = false;
+//
+// $(function () {
+//
+// });
+//
+// function save_email() {
+//     // 前端校验邮箱地址格式
+//     check_email();
+//     if (email_error) {
+//         alert('请输入正确格式的邮箱');
+//         return;
+//     }
+//
+//     var params = {
+//         'email':$('.email').val()
+//     };
+//
+//     $.ajax({
+//         url: '/emails/',
+//         type: 'post',
+//         data: JSON.stringify(params),
+//         contentType: 'application/json',
+//         headers: {'X-CSRFToken':getCookie('csrftoken')},
+//         success:function (response) {
+//             if (response.code == "0") {
+//                 $('.email').attr("disabled","disabled");
+//                 $('.save_email').hide();
+//                 $('.reset_email').hide();
+//                 $('.resend_email').show();
+//             } else if (response.code == "4101") {
+//                 // 用户未登录
+//                 location.href = '/login/?next=/info/';
+//             } else {
+//                 console.log(response);
+//                 alert(response.errmsg);
+//             }
+//         }
+//     });
+// }
+//
+// function reset_email() {
+//     $('.email').val("");
+// }
+//
+// // 校验邮箱
+// function check_email() {
+//     var email = $('.email').val();
+//     var re = /^[a-z0-9][\w\.\-]*@[a-z0-9\-]+(\.[a-z]{2,5}){1,2}$/;
+//
+//     if(!re.test(email)) {
+//         email_error = true;
+//     } else {
+//         email_error = false;
+//     }
+// }
+
+

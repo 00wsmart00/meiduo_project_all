@@ -73,3 +73,86 @@ var vm = new Vue({
         }
     }
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+// $(function(){
+//     // 设置几颗星
+//     var $stars = $('.stars a');
+//     var $score = $('.score');
+//     var marked = 0;
+//
+//     $stars.mouseover(function(){
+//         var iNow = $(this).index();
+//         $(this).addClass('light').prevAll().addClass('light').end().nextAll().removeClass('light');
+//         $score.html((parseInt(iNow)+1)*20 + '分');
+//     });
+//     $stars.mouseout(function(){
+//         if(marked==0)
+//         {
+//             $stars.removeClass('light');
+//             $score.html('0分');
+//         }
+//         else{
+//             $stars.eq(marked-1).prevAll().addClass('light').end().nextAll().removeClass('light');
+//             $score.html(marked*20 + '分');
+//         }
+//     });
+//     $stars.click(function(){
+//         var iNow = $(this).index();
+//         marked = parseInt(iNow)+1;
+//     });
+// });
+
+
+// 提交评价
+// $('.judge_sub').click(function () {
+//     var $that = $(this);
+//     var url = '/orders/comment/';
+//     var sku_id = $(this).attr('sku_id');
+//     var comment = $('.judge_area').val();
+//     var final_score = parseInt($(this).parent().siblings('.judge_item').find('.score').html()) / 20;
+//     var is_anonymous = $(this).next().prop('checked');
+//
+//     if (comment.length < 5) {
+//         alert('请输入不少于五个字的评价信息');
+//         return;
+//     }
+//
+//     var params = {
+//         'order_id':get_query_string('order_id'),
+//         'sku_id': sku_id,
+//         'comment': comment,
+//         'score': final_score,
+//         'is_anonymous': is_anonymous
+//     };
+//
+//     $.ajax({
+//         url: url,
+//         type: 'post',
+//         data: JSON.stringify(params),
+//         contentType: 'application/json',
+//         headers: {'X-CSRFToken':getCookie('csrftoken')},
+//         success:function (response) {
+//             if (response.code == '0') {
+//                 // 移除对应的dom
+//                 $that.closest('.judge_con').remove();
+//
+//             } else if (response.code == '4101') {
+//                 location.href = '/authorizations/?next=/orders/comment/';
+//             } else {
+//                 alert(response.errmsg);
+//             }
+//         }
+//     });
+// });
